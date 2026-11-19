@@ -775,6 +775,9 @@ const cv = document.getElementById('view');
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
 // الوضع الآمن: للآيفون (أو بعد انهيار سابق): بدون HDR ولا MSAA، ودقة ثابتة لا يُعاد بناؤها أثناء اللعب
 const SAFE = IS_IOS || /[?&]safe\b/.test(location.search) || (() => { try { return localStorage.getItem('kSafe') === '1'; } catch (e) { return false; } })();
+// دقة المجسمات: الجوال أخف (كانت الأكياس وحدها أكثر من مليون رأس وتسبب نفاد ذاكرة الآيفون)
+const MOB_UA = IS_IOS || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const GEO_LOD = SAFE ? 0.6 : MOB_UA ? 0.75 : 1;
 function setVH() { try { const h = (window.visualViewport && visualViewport.height) || innerHeight; document.documentElement.style.setProperty('--vh', Math.round(h) + 'px'); } catch (e) {} }
 setVH(); addEventListener('resize', setVH); addEventListener('orientationchange', () => setTimeout(setVH, 300));
 if (window.visualViewport) visualViewport.addEventListener('resize', setVH);
@@ -1111,7 +1114,7 @@ function bagPoint(b, lat, y, depth) {
   return b.axis === 'x' ? [off, y, b.c + lat * latSign] : [b.c + lat * latSign, y, off];
 }
 function buildBag(a, b, bi) {
-  const NS = 32, NT = 44, D = 0.11, base = 0.012;
+  const NS = MOB_UA ? 12 : 22, NT = MOB_UA ? 16 : 30, D = 0.11, base = 0.012;
   const surf = (s, t) => {
     const hw = b.W / 2 * (1 - 0.07 * Math.max(0, t)) * (1 + 0.04 * Math.max(0, -t));
     const bul = D * Math.pow(Math.max(0, 1 - s * s), 0.42) * Math.pow(Math.max(0, 1 - t * t), 0.32) * (1.08 - 0.16 * t);
@@ -1160,9 +1163,9 @@ function buildBag(a, b, bi) {
 const ATLAS_COLS = 4;
 const BAG_ELS = [...new Set(BAGS.map(b => b.el))];         // كل عنصر له خانة واحدة في الأطلس
 function bagTexture(list) {
-  const W = 512, H = 720, c = document.createElement('canvas');
-  c.width = W * ATLAS_COLS; c.height = H * Math.ceil(list.length / ATLAS_COLS);
-  const x = c.getContext('2d');
+  const W = 512, H = 720, c = document.createElement('canvas'), BK = IS_IOS ? 0.6 : 1;
+  c.width = Math.round(W * ATLAS_COLS * BK); c.height = Math.round(H * Math.ceil(list.length / ATLAS_COLS) * BK);
+  const x = c.getContext('2d'); x.scale(BK, BK);
   list.forEach((el, bi) => { x.save(); x.translate((bi % ATLAS_COLS) * W, Math.floor(bi / ATLAS_COLS) * H); drawBagLabel(x, el, W, H); x.restore(); });
   return uploadCanvas(c);
 }
@@ -1285,6 +1288,7 @@ function mkXf(pos, rx = 0, ry = 0, rz = 0) {
 }
 // جسم دوراني من مقطع جانبي [نصف القطر، الارتفاع] بالسنتيمتر
 function lathe(arr, prof, xf, mat, marks = 0, segs = 48, deform = null) {
+  segs = Math.max(12, Math.round(segs * GEO_LOD));
   const n = prof.length, ymax = Math.max(...prof.map(p => p[1])) || 1;
   const sn = [];
   for (let i = 0; i < n - 1; i++) {
