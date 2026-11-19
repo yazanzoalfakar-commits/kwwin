@@ -771,6 +771,29 @@ function canStand(x, y) {
 //  WebGL2
 // =====================================================================
 const cv = document.getElementById('view');
+// ---- توافق الآيفون / سفاري ----
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+function freeCanvas(c) { try { if (c && c.width !== undefined) { c.width = 0; c.height = 0; } } catch (e) {} }
+// سفاري قبل iOS 16 لا يعرف roundRect
+if (window.CanvasRenderingContext2D && !CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    r = Array.isArray(r) ? (r[0] || 0) : (+r || 0); r = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
+    this.moveTo(x + r, y); this.lineTo(x + w - r, y); this.quadraticCurveTo(x + w, y, x + w, y + r);
+    this.lineTo(x + w, y + h - r); this.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    this.lineTo(x + r, y + h); this.quadraticCurveTo(x, y + h, x, y + h - r);
+    this.lineTo(x, y + r); this.quadraticCurveTo(x, y, x + r, y); this.closePath(); return this;
+  };
+}
+// إذا صار خطأ يمنع التشغيل نعرضه على الشاشة بدل شاشة فاضية (يساعد في معرفة السبب)
+window.addEventListener('error', e => {
+  try {
+    if (window.__kErrShown || !e.message) return; window.__kErrShown = true;
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:99999;background:rgba(120,20,20,.92);color:#fff;font:13px/1.5 system-ui;padding:8px 12px;border-radius:10px;direction:ltr;text-align:left';
+    d.textContent = '⚠️ ' + e.message + ' @' + (e.lineno || '?') + ' · ' + navigator.userAgent.replace(/^[^(]*/, '').slice(0, 90);
+    d.onclick = () => d.remove(); document.body.appendChild(d);
+  } catch (er) {}
+});
 const gl = cv.getContext('webgl2', {antialias: false, alpha: false, depth: true, powerPreference: 'high-performance'});
 // إذا فقد المتصفح سياق الرسم (ضغط ذاكرة على الجوال) نعيد تحميل الصفحة بدل بقاء الشاشة سوداء؛ تقدّم الغرف محفوظ
 cv.addEventListener('webglcontextlost', e => { e.preventDefault(); try { const t = document.getElementById('toast'); if (t) { t.textContent = 'جاري استعادة الرسوم…'; t.style.opacity = 1; } } catch (er) {} }, false);
@@ -1187,6 +1210,7 @@ function uploadCanvas(c) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   if (extAniso) gl.texParameterf(gl.TEXTURE_2D, extAniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(extAniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+  if (c instanceof HTMLCanvasElement) freeCanvas(c);   // الآيفون يحد ذاكرة اللوحات: بعد الرفع لكرت الشاشة لا نحتاج اللوحة
   return t;
 }
 // نافذة الغاز في الخامة (uv): x 80..432 / 512 ، y 546..670 / 720 (مقلوبة)
@@ -1334,7 +1358,7 @@ const buretteP = [[0, 0], [0.1, 0], [0.15, 0.2], [0.28, 3], [0.28, 4.2], [0.62, 
 // =====================================================================
 const BOARD = { x0: 9.9, x1: 15.1, y0: 0.66, y1: 1.96, z: 4.0, M: 20 };
 function chalkCanvas(W0, H0, draw, base) {
-  const BW = Math.round(LOWQ ? W0 * 0.75 : W0), K = BW / W0, BH = Math.round(H0 * K);
+  const BW = Math.round(W0 * (IS_IOS ? 0.6 : LOWQ ? 0.75 : 1)), K = BW / W0, BH = Math.round(H0 * K);
   const c = document.createElement('canvas'); c.width = BW; c.height = BH;
   const x = c.getContext('2d');
   const FONT = "'Tajawal','Segoe UI','Noto Naskh Arabic','Geeza Pro',Arial,sans-serif";
@@ -1385,6 +1409,7 @@ function chalkCanvas(W0, H0, draw, base) {
   t.globalCompositeOperation = 'source-over';
   x.globalAlpha = 0.93; x.drawImage(L, 0, 0);
   x.globalAlpha = 0.12; x.filter = 'blur(' + Math.round(3 * K) + 'px)'; x.drawImage(L, 0, 0); x.filter = 'none'; x.globalAlpha = 1;
+  freeCanvas(L); freeCanvas(N);
   return c;
 }
 function boardCanvas() {
@@ -4641,8 +4666,9 @@ function updateBook(o, dt, B) {
 function bookHeldPos(B) { return add3(add3(add3(B.e, B.f, 0.40), B.r, 0.15), B.u, -0.17); }
 
 function solidsAtlas() {
-  const c = document.createElement('canvas'); c.width = SA.W; c.height = SA.H;
-  const x = c.getContext('2d');
+  const SK = IS_IOS ? 0.75 : 1;   // الآيفون: أطلس أصغر لتوفير الذاكرة
+  const c = document.createElement('canvas'); c.width = Math.round(SA.W * SK); c.height = Math.round(SA.H * SK);
+  const x = c.getContext('2d'); x.scale(SK, SK);
   const FONT = "'Tajawal','Segoe UI','Noto Naskh Arabic','Geeza Pro',Arial,sans-serif";
   const rr = (X, Y, w, h, r) => { x.beginPath(); x.moveTo(X + r, Y); x.arcTo(X + w, Y, X + w, Y + h, r); x.arcTo(X + w, Y + h, X, Y + h, r); x.arcTo(X, Y + h, X, Y, r); x.arcTo(X, Y, X + w, Y, r); x.closePath(); };
   SOLIDS.forEach((el, i) => {
