@@ -773,6 +773,8 @@ function canStand(x, y) {
 const cv = document.getElementById('view');
 // ---- توافق الآيفون / سفاري ----
 const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1);
+// الوضع الآمن: للآيفون (أو بعد انهيار سابق): بدون HDR ولا MSAA، ودقة ثابتة لا يُعاد بناؤها أثناء اللعب
+const SAFE = IS_IOS || /[?&]safe\b/.test(location.search) || (() => { try { return localStorage.getItem('kSafe') === '1'; } catch (e) { return false; } })();
 function freeCanvas(c) { try { if (c && c.width !== undefined) { c.width = 0; c.height = 0; } } catch (e) {} }
 // سفاري قبل iOS 16 لا يعرف roundRect
 if (window.CanvasRenderingContext2D && !CanvasRenderingContext2D.prototype.roundRect) {
@@ -796,8 +798,17 @@ window.addEventListener('error', e => {
 });
 const gl = cv.getContext('webgl2', {antialias: false, alpha: false, depth: true, powerPreference: 'high-performance'});
 // إذا فقد المتصفح سياق الرسم (ضغط ذاكرة على الجوال) نعيد تحميل الصفحة بدل بقاء الشاشة سوداء؛ تقدّم الغرف محفوظ
-cv.addEventListener('webglcontextlost', e => { e.preventDefault(); try { const t = document.getElementById('toast'); if (t) { t.textContent = 'جاري استعادة الرسوم…'; t.style.opacity = 1; } } catch (er) {} }, false);
-cv.addEventListener('webglcontextrestored', () => { location.reload(); }, false);
+cv.addEventListener('webglcontextlost', e => {
+  e.preventDefault();
+  try { localStorage.setItem('kSafe', '1'); } catch (er) {}   // المرة القادمة يشتغل بالوضع الآمن
+  try {
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(10,14,18,.94);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font:600 18px/1.6 Tajawal,system-ui;text-align:center;padding:20px';
+    d.innerHTML = '<div>توقّف عرض الرسوم على هذا الجهاز</div><div style="font-weight:400;font-size:15px;opacity:.8">اضغط الزر لتشغيل اللعبة بالوضع الخفيف</div><button style="font:700 18px Tajawal,system-ui;padding:10px 26px;border-radius:12px;border:0;background:#ffd166;color:#1d2630">إعادة التشغيل</button>';
+    d.querySelector('button').onclick = () => location.reload();
+    document.body.appendChild(d);
+  } catch (er) {}
+}, false);
 const errEl = document.getElementById('err'), startBtn = document.getElementById('start');
 if (!gl) {
   errEl.textContent = 'متصفحك لا يدعم WebGL2 – جرّب Chrome أو Edge أو Firefox حديث.';
@@ -806,7 +817,7 @@ if (!gl) {
 }
 const extCBF = gl.getExtension('EXT_color_buffer_float');
 const extAniso = gl.getExtension('EXT_texture_filter_anisotropic') || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
-const HDR = !!extCBF;
+const HDR = !!extCBF && !SAFE;
 const HDR_FMT = HDR ? gl.RGBA16F : gl.RGBA8;
 const OUT_SCALE = HDR ? 1.0 : 0.25;   // بدون HDR نخزن القيم مصغّرة
 
@@ -5264,7 +5275,7 @@ function setupFB(w, h) {
     [FB.ms, FB.scene, FB.b1, FB.b2, FB.bg].forEach(f => gl.deleteFramebuffer(f));
     [FB.msC, FB.msD].forEach(r => gl.deleteRenderbuffer(r));
   }
-  const samples = Math.min(LOWQ ? 2 : 4, gl.getParameter(gl.MAX_SAMPLES));
+  const samples = SAFE ? 0 : Math.min(LOWQ ? 2 : 4, gl.getParameter(gl.MAX_SAMPLES));
   const ms = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, ms);
   const msC = gl.createRenderbuffer(); gl.bindRenderbuffer(gl.RENDERBUFFER, msC);
   gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, HDR_FMT, w, h);
@@ -5333,7 +5344,7 @@ function setupShadows() {
   SH = CUR_T === LAB_A ? LAB_A.sh : QSH;
 }
 function makeShadow(T, R) {
-  const S = R ? R.size : ((LOWQ && T !== LAB_A) ? 1024 : 2048), EXT = 1.3, NEAR = 0.1, FAR = 4.0;
+  const S = R ? R.size : (SAFE || (LOWQ && T !== LAB_A) ? 1024 : 2048), EXT = 1.3, NEAR = 0.1, FAR = 4.0;
   const mkDepth = () => {
     const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, S, S, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
@@ -5785,7 +5796,8 @@ function loop(t) {
       // أقل من ~٤٩ إطار/ث: خفّض الدقة قليلًا · ثابت قرب ٦٠: ارفعها تدريجيًا حتى أعلى جودة
       // الجوال: خطوات أكبر وأقل تكرارًا، ويتوقف عن الصعود إذا تذبذب (كل تغيير يعيد بناء الإطارات)
       const top = Math.min(Q.max, qCap), stepD = MOBILE ? 0.1 : 0.08, stepU = MOBILE ? 0.1 : 0.04;
-      if (avg > 20.5 && renderScale > Q.min && time > qCool - 4) {
+      if (SAFE && QUAL === 'auto') {}   // الوضع الآمن: لا نغيّر الدقة أثناء اللعب
+      else if (avg > 20.5 && renderScale > Q.min && time > qCool - 4) {
         if (qDir > 0 && ++qFlips >= 2) qCap = renderScale - stepD;
         renderScale = Math.max(Q.min, renderScale - stepD); qCool = time + (MOBILE ? 10 : 6); qDir = -1;
       } else if (avg < 17.6 && time > qCool && renderScale < top - 0.001) {
@@ -5827,6 +5839,7 @@ function applyDevice() {
   document.getElementById('device').innerHTML = 'جهازك: ' + names[k];
   if (MOBILE && k === 'phone') showMini = false;
   if (MOBILE && QUAL === 'auto' && renderScale > 0.75) renderScale = 0.75;
+  if (SAFE && QUAL === 'auto') renderScale = 0.8;
   document.body.classList.toggle('portrait', innerHeight > innerWidth);
 }
 applyDevice();
