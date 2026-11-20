@@ -95,6 +95,7 @@
   #bF{width:var(--bs);height:var(--bs);right:calc(var(--pad) + var(--bs) * .15 + env(safe-area-inset-right));bottom:calc(var(--pad) + var(--bs) * 2.8)}
   #bA{--acc:#f2c14e;width:calc(var(--bs) * .92);height:calc(var(--bs) * .92);border-color:#f2c14e;right:calc(var(--pad) + var(--bs) * 2.7 + env(safe-area-inset-right));bottom:calc(var(--pad) + var(--bs) * .12)}
   #bG{--acc:#b88cf0;width:calc(var(--bs) * .92);height:calc(var(--bs) * .92);border-color:#b88cf0;right:calc(var(--pad) + var(--bs) * 1.6 + env(safe-area-inset-right));bottom:calc(var(--pad) + var(--bs) * 2.35)}
+  #bGun{--acc:#ffb347;width:calc(var(--bs) * .82);height:calc(var(--bs) * .82);border-color:#ffb347;right:calc(var(--pad) + var(--bs) * 2.75 + env(safe-area-inset-right));bottom:calc(var(--pad) + var(--bs) * 2.45)}
   #bPause,#bMap{position:absolute;top:12px;width:46px;height:46px;border-radius:12px;pointer-events:auto;border:1px solid rgba(255,255,255,.25);
     background:rgba(20,24,29,.6);color:#fff;font-size:22px;backdrop-filter:blur(6px)}
   #bPause{left:calc(12px + env(safe-area-inset-left))} #bMap{left:calc(66px + env(safe-area-inset-left))}
@@ -559,6 +560,7 @@
     <button class="mb hide" id="bX"><span class="ic">🗑</span><span class="lb">تفريغ</span></button>
     <button class="mb hide" id="bG"></button>
     <button class="mb hide" id="bA"></button>
+    <button class="mb hide" id="bGun"><span class="ic">🔫</span><span class="lb" id="bGunLb">رمي</span></button>
     <button class="mb hide" id="bF"><span class="ic">🚪</span><span class="lb" id="bFLb">الباب</span></button>
     <button id="bPause">☰</button><button id="bMap">🗺</button>
     <div id="rotate"><div class="ph" data-ic="phone"></div>أدر الجهاز للوضع الأفقي لتجربة أفضل</div>
@@ -4335,7 +4337,7 @@ function updateInteract0(dt) {
   } else if (held && held.type === 'spatula') h = spatulaHand();
   else if (held && held.type === 'book') { const BK = BOOKS[held.bookId]; h = 'في يدك: ' + BK.title + ' · كوّنت ' + BK.done() + ' من ' + BK.list.length + ' مادة منه'; }
   else if (held) h = 'في يدك: كأس زجاجية ' + held.ml + ' مل' + contentsText(held);
-  else if (GUN.has) h = '🔫 في يدك: السلاح السري · يفتح أي باب مقفل بضغطة <b>F</b>';
+  else if (GUN.has) h = '🔫 في يدك: السلاح السري · يفتح أي باب مقفل بضغطة ' + (MOBILE ? 'زر الباب' : '<b>F</b> · <b>T</b> لرميه');
   if (h !== handEl._h) { handEl._h = h; handEl.innerHTML = h; handEl.style.display = h ? 'block' : 'none'; }
   return txt;
 }
@@ -5496,9 +5498,13 @@ function render() {
     gl.drawArrays(gl.TRIANGLES, o.range.start, o.range.count);
   }
   // السلاح السري: يرتفع من الأرض في الزاوية، أو في يد اللاعب
-  if (GUN.range && (GUN.has ? (!held && playing) : GUN.rev > 0.01)) {
+  if (GUN.range && (GUN.drop || (GUN.has ? (!held && playing) : GUN.rev > 0.01))) {
     let off, R;
-    if (GUN.has) {
+    if (GUN.drop) {
+      const D = GUN.drop, cy = Math.cos(D.yaw), sy = Math.sin(D.yaw), k = D.t, fall = (1 - k * k) * 0.85;
+      R = [cy, 0, -sy, sy, 0, cy, 0, -1, 0];   // مستلقٍ على جنبه
+      off = [D.x - GUN.c[0], 0.026 + fall - GUN.c[1], D.z - GUN.c[2]];
+    } else if (GUN.has) {
       const B = camBasis(), t = gunHeldPos(B);
       // الماسورة تتجه نحو نقطة التصويب في منتصف الشاشة
       const X = nrm3(add3(add3(B.e, B.f, 4), t, -1)), Y = nrm3(add3(B.u, X, -dot3(B.u, X))), Z = cross3(X, Y);
@@ -5747,9 +5753,29 @@ function nearestBag() {
 //  السلاح السري: مخفي في زاوية غرفة البداية (خلف اللاعب عند البداية)
 //  لا يظهر إلا إذا وقفت قريبًا من الزاوية، ويفتح أي باب مقفل بدون حل السؤال
 // =====================================================================
-const GUN = { c: [6.48, 0.46, 4.48], range: null, has: false, rev: 0, opened: {}, fire: 0, spin: 0, spark: 0, hinted: false };
-try { GUN.has = localStorage.getItem('kGun') === '1'; GUN.opened = JSON.parse(localStorage.getItem('kGunOpen') || '{}') || {}; } catch (e) {}
-function saveGun() { try { localStorage.setItem('kGun', GUN.has ? '1' : '0'); localStorage.setItem('kGunOpen', JSON.stringify(GUN.opened)); } catch (e) {} }
+const GUN = { c: [6.48, 0.46, 4.48], range: null, has: false, rev: 0, opened: {}, fire: 0, spin: 0, spark: 0, hinted: false, drop: null };
+try { GUN.has = localStorage.getItem('kGun') === '1'; GUN.opened = JSON.parse(localStorage.getItem('kGunOpen') || '{}') || {}; const d = JSON.parse(localStorage.getItem('kGunDrop') || 'null'); if (d && !GUN.has) GUN.drop = Object.assign(d, { t: 1, thud: true }); } catch (e) {}
+function saveGun() { try { localStorage.setItem('kGun', GUN.has ? '1' : '0'); localStorage.setItem('kGunOpen', JSON.stringify(GUN.opened)); localStorage.setItem('kGunDrop', JSON.stringify(GUN.drop ? { x: GUN.drop.x, z: GUN.drop.z, yaw: GUN.drop.yaw } : null)); } catch (e) {} }
+// رمي السلاح على الأرض أمام اللاعب، وأخذه مرة ثانية
+function gunNear() { return !!GUN.drop && Math.hypot(P.x - GUN.drop.x, P.y - GUN.drop.z) < 1.4; }
+function dropGun() {
+  if (!GUN.has) return false;
+  const dx = Math.cos(P.a), dz = Math.sin(P.a);
+  let x = P.x, z = P.y;
+  for (const k of [0.75, 0.5, 0.3]) if (canStand(P.x + dx * k, P.y + dz * k)) { x = P.x + dx * k; z = P.y + dz * k; break; }
+  GUN.has = false; GUN.drop = { x, z, yaw: P.a + (Math.random() - 0.5) * 1.2, t: 0, thud: false }; saveGun();
+  if (AC) try { tone(300, 0, 0.12, 0.05, 'triangle'); } catch (e) {}
+  toast('🔫 رميت السلاح السري على الأرض · اقترب منه واضغط ' + (MOBILE ? 'زر <b>🔫 أخذ</b>' : '<b>T</b>') + ' لأخذه', 3.5);
+  return true;
+}
+function pickGun() {
+  if (!gunNear()) return false;
+  const d = GUN.drop; GUN.drop = null; GUN.has = true; saveGun(); gunPickSound();
+  for (let i = 0; i < 24; i++) { const r = randUnit(); DEBRIS.push({ p: [d.x, 0.05, d.z], v: r.map(v => v * 0.6), life: 0.7, t: 0, fw: [14, 10, 3], r: 0.01 }); }
+  toast('🔫 أخذت السلاح السري', 1.8);
+  return true;
+}
+function gunKey() { initAudio(); if (!dropGun()) pickGun(); }
 function addGun(dyn) {
   const [cx, cy, cz] = GUN.c, st = dyn.length / 9;
   // محور الماسورة على +x ؛ lathe: (نصف قطر، ارتفاع) بالسنتيمتر ← نحوّل محور الارتفاع إلى x
@@ -5784,6 +5810,14 @@ function gunOpenDoor(g, Q) {
 }
 function updateGun(dt) {
   GUN.spin += dt * 1.7; GUN.fire = Math.max(0, GUN.fire - dt * 3.5);
+  if (GUN.drop) {
+    const D = GUN.drop; D.t = Math.min(1, D.t + dt * 2.4);
+    if (D.t >= 1 && !D.thud) { D.thud = true; if (AC) try { tone(140, 0, 0.12, 0.08, 'triangle'); tone(220, 0.03, 0.08, 0.04, 'square'); } catch (e) {}
+      for (let i = 0; i < 10; i++) { const a = Math.random() * 6.283; DEBRIS.push({ p: [D.x, 0.03, D.z], v: [Math.cos(a) * 0.4, 0.25, Math.sin(a) * 0.4], life: 0.45, t: 0, fw: [6, 5, 4], r: 0.008 }); } }
+    if (D.t >= 1 && playing) { GUN.spark -= dt; if (GUN.spark <= 0) { GUN.spark = 0.35; const a = Math.random() * 6.283;
+      DEBRIS.push({ p: [D.x + Math.cos(a) * 0.1, 0.06, D.z + Math.sin(a) * 0.1], v: [0, 0.12, 0], life: 0.7, t: 0, fw: [14, 10, 3], r: 0.007 }); } }
+    return;
+  }
   if (GUN.has || !playing) return;
   const d = Math.hypot(P.x - GUN.c[0], P.y - GUN.c[2]);
   GUN.rev = Math.max(0, Math.min(1, GUN.rev + (d < 1.9 ? dt * 0.9 : -dt * 1.5)));
@@ -5865,6 +5899,7 @@ function update(dt) {
     const b = nearestBag();
     if (b) { const e = ELEMENTS[b.el]; txt = 'كيس ' + e.nameAr + ' (' + e.symbol + ') · ' + (e.group || e.kind) + ' · ' + e.state; }
   }
+  if (gunNear() && GUN.drop.t >= 1 && !(t && t.locked)) txt = MOBILE ? '🔫 اضغط زر <b>أخذ</b> لأخذ السلاح السري' : '🔫 اضغط <b>T</b> لأخذ السلاح السري';
   const uk = useKindNow();
   txt = mobilize(txt, uk);
   if (txt !== lastPrompt) { lastPrompt = txt; promptEl.innerHTML = txt; promptEl.style.display = txt ? 'block' : 'none'; }
@@ -6000,6 +6035,7 @@ holdBtn('bX', () => clearTarget());
 holdBtn('bG', () => startQuickGrind(), () => grindBtn = false);
 holdBtn('bA', () => { if (ALLK) allReq = true; });
 holdBtn('bF', () => { const g = nearestDoor(); if (g) toggleDoor(g); });
+holdBtn('bGun', () => gunKey());
 holdBtn('bPause', () => pauseGame());
 holdBtn('bMap', () => showMini = !showMini);
 // تحديث الأزرار السياقية حسب ما يمكن فعله الآن
@@ -6067,8 +6103,10 @@ function updateTouchButtons(uk) {
   }
   const d = nearestDoor(); if (d) f = d.want ? 'إغلاق' : 'فتح';
   const gq = canQuickGrind();
-  const key = [e, x, uk, f, gq, ALLK].join('|');
+  const gb = GUN.has && !held ? 'رمي' : (gunNear() && GUN.drop.t >= 1 ? 'أخذ' : null);
+  const key = [e, x, uk, f, gq, ALLK, gb].join('|');
   if (key === lastAct) return; lastAct = key;
+  { const b = document.getElementById('bGun'); b.classList.toggle('hide', !gb); if (gb) document.getElementById('bGunLb').textContent = gb; }
   if (uk) {
     const k = USE_K[uk];
     bUseEl.innerHTML = icon(k[0]) + '<span class="lb">' + k[1] + '</span>';
@@ -6110,7 +6148,7 @@ startBtn.addEventListener('click', startGame);
 function resetProgress() {
   for (const k of ['roomsSolved', 'roomsDiscovered', 'bookSeen']) { try { localStorage.removeItem(k); } catch (e) {} }
   SOLVED = {}; DISC = {}; BOOK_SEEN = {};
-  GUN.has = false; GUN.opened = {}; GUN.rev = 0; GUN.hinted = false; saveGun();
+  GUN.has = false; GUN.opened = {}; GUN.rev = 0; GUN.hinted = false; GUN.drop = null; saveGun();
   if (typeof scanSound === 'function') scanSound(false);
   held = null; useBtn = false; useTap = false;
   for (const o of OBJS) {
@@ -6198,6 +6236,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyG' && !e.repeat && playing) startQuickGrind();
   if (e.code === 'KeyC' && !e.repeat && playing) requestAll();
   if (e.code === 'KeyQ' && !e.repeat) { useBtn = true; useTap = true; }
+  if (e.code === 'KeyT' && !e.repeat) gunKey();
   if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
     exposure = Math.max(0.35, Math.min(1.6, exposure * (e.code === 'BracketLeft' ? 0.9 : 1.1)));
     toast('السطوع ' + Math.round(exposure / 0.82 * 100) + '%');
