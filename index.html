@@ -2701,7 +2701,7 @@ function updateQuests(dt) {
   updateDebris(dt); updateBoom(dt); updateFinale(dt);
   for (const Q of QUESTS) {
     const g = questDoor(Q);
-    if (g) g.locked = !SOLVED[Q.id];
+    if (g) g.locked = !SOLVED[Q.id] && !GUN.opened[Q.id];
     for (const p of Q.peds) {
       const o = p.beaker;
       if (o && !o.held && !o.broken && (!o.target || dist3(o.pos, o.target) < 0.012)) {
@@ -2960,7 +2960,7 @@ function addLab(a, T) {
     const o = { type: 'spatula', items: [], pivotL: [0.5, 0.075, 0], home: sp.p([0.5, 0.075, 0]), range: { start: st, count: DYN.length / 9 - st }, yaw: 0, tilt: 0 };
     o.pos = o.home.slice(); OBJS.push(o);
   }
-  if (!quest) { addBoard(a, DYN); addCredits(a, DYN); } else { addQuestRoom(a, DYN, quest); if (quest.id === 'q14') addThanks(a, DYN); }
+  if (!quest) { addBoard(a, DYN); addCredits(a, DYN); addGun(DYN); } else { addQuestRoom(a, DYN, quest); if (quest.id === 'q14') addThanks(a, DYN); }
   addBookShelf(a, DYN, T.bs);
   T.opaque = new Float32Array(a.slice(a0));
   LAB_OPAQUE = T.opaque;
@@ -4335,6 +4335,7 @@ function updateInteract0(dt) {
   } else if (held && held.type === 'spatula') h = spatulaHand();
   else if (held && held.type === 'book') { const BK = BOOKS[held.bookId]; h = 'في يدك: ' + BK.title + ' · كوّنت ' + BK.done() + ' من ' + BK.list.length + ' مادة منه'; }
   else if (held) h = 'في يدك: كأس زجاجية ' + held.ml + ' مل' + contentsText(held);
+  else if (GUN.has) h = '🔫 في يدك: السلاح السري · يفتح أي باب مقفل بضغطة <b>F</b>';
   if (h !== handEl._h) { handEl._h = h; handEl.innerHTML = h; handEl.style.display = h ? 'block' : 'none'; }
   return txt;
 }
@@ -5494,6 +5495,21 @@ function render() {
     gl.uniform3f(S.u.uOff, o.pos[0] - o.home[0], o.pos[1] - o.home[1], o.pos[2] - o.home[2]);
     gl.drawArrays(gl.TRIANGLES, o.range.start, o.range.count);
   }
+  // السلاح السري: يرتفع من الأرض في الزاوية، أو في يد اللاعب
+  if (GUN.range && (GUN.has ? (!held && playing) : GUN.rev > 0.01)) {
+    let off, R;
+    if (GUN.has) {
+      const B = camBasis(), t = gunHeldPos(B);
+      // الماسورة تتجه نحو نقطة التصويب في منتصف الشاشة
+      const X = nrm3(add3(add3(B.e, B.f, 4), t, -1)), Y = nrm3(add3(B.u, X, -dot3(B.u, X))), Z = cross3(X, Y);
+      R = [...X, ...Y, ...Z]; off = [t[0] - GUN.c[0], t[1] - GUN.c[1], t[2] - GUN.c[2]];
+    } else {
+      R = rotMat(GUN.spin, 0.18 * Math.sin(GUN.spin * 0.7)).gl;
+      off = [0, (GUN.rev - 1) * 0.42 + Math.sin(GUN.spin * 1.6) * 0.02, 0];
+    }
+    gl.uniformMatrix3fv(S.u.uRM, false, R); gl.uniform3fv(S.u.uPivot, GUN.c); gl.uniform3f(S.u.uOff, off[0], off[1], off[2]);
+    gl.drawArrays(gl.TRIANGLES, GUN.range.start, GUN.range.count);
+  }
   // المدقة: تدور داخل الهاون أثناء الطحن
   for (const M of MORTARS) {
     gl.uniformMatrix3fv(S.u.uRM, false, rotMat(M.ang, 0).gl);
@@ -5726,17 +5742,72 @@ function nearestBag() {
   }
   return best;
 }
+
+// =====================================================================
+//  السلاح السري: مخفي في زاوية غرفة البداية (خلف اللاعب عند البداية)
+//  لا يظهر إلا إذا وقفت قريبًا من الزاوية، ويفتح أي باب مقفل بدون حل السؤال
+// =====================================================================
+const GUN = { c: [6.48, 0.46, 4.48], range: null, has: false, rev: 0, opened: {}, fire: 0, spin: 0, spark: 0, hinted: false };
+try { GUN.has = localStorage.getItem('kGun') === '1'; GUN.opened = JSON.parse(localStorage.getItem('kGunOpen') || '{}') || {}; } catch (e) {}
+function saveGun() { try { localStorage.setItem('kGun', GUN.has ? '1' : '0'); localStorage.setItem('kGunOpen', JSON.stringify(GUN.opened)); } catch (e) {} }
+function addGun(dyn) {
+  const [cx, cy, cz] = GUN.c, st = dyn.length / 9;
+  // محور الماسورة على +x ؛ lathe: (نصف قطر، ارتفاع) بالسنتيمتر ← نحوّل محور الارتفاع إلى x
+  const xfAt = x0 => ({ p: v => [x0 + v[1] * 0.01, cy + 0.006 - v[0] * 0.01, cz + v[2] * 0.01], n: v => [v[1], -v[0], v[2]] });
+  box(dyn, cx - 0.075, cy - 0.026, cz - 0.024, cx + 0.05, cy + 0.032, cz + 0.024, M_DARK);         // الجسم
+  box(dyn, cx - 0.065, cy + 0.032, cz - 0.009, cx + 0.042, cy + 0.046, cz + 0.009, M_ORANGE);      // سكة ذهبية
+  box(dyn, cx - 0.09, cy - 0.02, cz - 0.02, cx - 0.075, cy + 0.028, cz + 0.02, M_ORANGE);          // الغطاء الخلفي
+  box(dyn, cx - 0.068, cy - 0.115, cz - 0.019, cx - 0.026, cy - 0.026, cz + 0.019, M_RUBBER);      // المقبض
+  box(dyn, cx - 0.026, cy - 0.062, cz - 0.004, cx + 0.012, cy - 0.054, cz + 0.004, M_METAL);       // واقي الزناد
+  box(dyn, cx + 0.008, cy - 0.062, cz - 0.004, cx + 0.014, cy - 0.026, cz + 0.004, M_METAL);
+  box(dyn, cx - 0.018, cy - 0.05, cz - 0.003, cx - 0.01, cy - 0.026, cz + 0.003, M_ORANGE);        // الزناد
+  lathe(dyn, [[0, 0], [1.7, 0], [1.7, 13], [0, 13]], xfAt(cx + 0.05), M_METAL, 0, 24);              // الماسورة
+  for (const k of [2.5, 6, 9.5]) lathe(dyn, [[0, k], [2.25, k], [2.25, k + 1.2], [0, k + 1.2]], xfAt(cx + 0.05), M_LAMP, 0, 24);   // حلقات مضيئة
+  lathe(dyn, [[0, 13], [2.4, 13], [2.0, 15], [0.9, 15], [0, 15.2]], xfAt(cx + 0.05), M_LAMP, 0, 24);  // فوهة مضيئة
+  GUN.range = { start: st, count: dyn.length / 9 - st };
+}
+function gunSound() { if (!AC) return; try { tone(1600, 0, 0.09, 0.07, 'sawtooth'); tone(900, 0.04, 0.16, 0.06, 'square'); tone(420, 0.1, 0.32, 0.07); tone(1300, 0.22, 0.3, 0.04); } catch (e) {} }
+function gunPickSound() { if (!AC) return; try { [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, i * 0.09, 0.22, 0.05)); } catch (e) {} }
+function gunHeldPos(B) { return add3(add3(add3(B.e, B.f, 0.44 - GUN.fire * 0.06), B.r, 0.15), B.u, -0.15 + GUN.fire * 0.03); }
+function gunOpenDoor(g, Q) {
+  GUN.opened[Q.id] = true; saveGun(); g.locked = false; GUN.fire = 1; gunSound();
+  // شعاع من الفوهة إلى الباب
+  const B = camBasis(), m = add3(gunHeldPos(B), B.f, 0.18);
+  const xs = g.cells.map(d => d.x + 0.5), zs = g.cells.map(d => d.y + 0.5);
+  const dc = [xs.reduce((a, b) => a + b, 0) / xs.length, 1.05, zs.reduce((a, b) => a + b, 0) / zs.length];
+  const L = dist3(m, dc), n = Math.min(70, Math.ceil(L / 0.06));
+  for (let i = 0; i <= n; i++) { const k = i / n, p = [m[0] + (dc[0] - m[0]) * k, m[1] + (dc[1] - m[1]) * k, m[2] + (dc[2] - m[2]) * k];
+    DEBRIS.push({ p, v: [(Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.08], life: 0.35 + k * 0.25, t: 0, fw: [3, 11, 14], r: 0.012 }); }
+  for (let i = 0; i < 46; i++) { const r = randUnit(); DEBRIS.push({ p: dc.slice(), v: r.map(v => v * (0.6 + Math.random() * 1.2)), life: 0.7 + Math.random() * 0.5, t: 0, fw: i % 2 ? [3, 11, 14] : [14, 11, 4], r: 0.014 }); }
+  toast('💥 فتحت الباب بالسلاح السري', 2.5);
+  setTimeout(() => { if (!g.want) { g.want = 1; doorSound(true, DOOR_TIME); } }, 260);
+}
+function updateGun(dt) {
+  GUN.spin += dt * 1.7; GUN.fire = Math.max(0, GUN.fire - dt * 3.5);
+  if (GUN.has || !playing) return;
+  const d = Math.hypot(P.x - GUN.c[0], P.y - GUN.c[2]);
+  GUN.rev = Math.max(0, Math.min(1, GUN.rev + (d < 1.9 ? dt * 0.9 : -dt * 1.5)));
+  if (GUN.rev > 0.05 && !GUN.hinted) { GUN.hinted = true; toast('✨ شيء يلمع في الزاوية…', 2.2); }
+  if (GUN.rev > 0.2) { GUN.spark -= dt; if (GUN.spark <= 0) { GUN.spark = 0.07;
+    const a = Math.random() * 6.283, y = GUN.c[1] + (GUN.rev - 1) * 0.4;
+    DEBRIS.push({ p: [GUN.c[0] + Math.cos(a) * 0.14, y - 0.05 + Math.random() * 0.12, GUN.c[2] + Math.sin(a) * 0.14], v: [0, 0.18, 0], life: 0.8, t: 0, fw: [14, 10, 3], r: 0.008 }); } }
+  if (GUN.rev > 0.85 && d < 0.9) {
+    GUN.has = true; saveGun(); gunPickSound();
+    for (let i = 0; i < 40; i++) { const r = randUnit(); DEBRIS.push({ p: GUN.c.slice(), v: r.map(v => v * 0.9), life: 0.9, t: 0, fw: [14, 10, 3], r: 0.012 }); }
+    toast('🔫 وجدت <b>السلاح السري</b>! اقترب من أي باب مقفل واضغط <b>F</b> ليفتحه بدون حل السؤال', 6);
+  }
+}
 const DOOR_TIME = 0.95;
 const ease = p => p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
 const insideDoor = g => g.cells.some(d => Math.floor(P.x) === d.x && Math.floor(P.y) === d.y);
 function toggleDoor(g) {
-  if (g.locked && !g.want) { const Q = QUESTS.find(q => questDoor(q) === g); lockedSound(); toast(Q ? Q.lock : '🔒 الباب مقفل', 3); return; }
+  if (g.locked && !g.want) { const Q = QUESTS.find(q => questDoor(q) === g); if (GUN.has && Q) { gunOpenDoor(g, Q); return; } lockedSound(); toast(Q ? Q.lock : '🔒 الباب مقفل', 3); return; }
   if (g.want === 1 && insideDoor(g)) return;
   g.want = g.want ? 0 : 1;
   doorSound(g.want === 1, Math.max(0.25, DOOR_TIME * (g.want ? 1 - g.p : g.p)));
 }
 function update(dt) {
-  syncTable(); updateQuests(dt);
+  syncTable(); updateQuests(dt); updateGun(dt);
   const turn = 2.8 * dt;
   if (keys['ArrowLeft']) P.a -= turn;
   if (keys['ArrowRight']) P.a += turn;
@@ -5785,7 +5856,7 @@ function update(dt) {
     g.open = ease(g.p);
   }
   const t = nearestDoor();
-  let txt = t ? (t.locked && !t.want ? '🔒 الباب مقفل · أجب عن السؤال لفتحه' : (t.want ? 'اضغط <b>F</b> لإغلاق الباب' : 'اضغط <b>F</b> لفتح الباب')) : '';
+  let txt = t ? (t.locked && !t.want ? (GUN.has ? '🔫 اضغط <b>F</b> لفتح الباب بالسلاح السري' : '🔒 الباب مقفل · أجب عن السؤال لفتحه') : (t.want ? 'اضغط <b>F</b> لإغلاق الباب' : 'اضغط <b>F</b> لفتح الباب')) : '';
   const it = updateInteract(dt);
   const tl = aimedTool();
   if (tl && !held) txt = tl.name;
@@ -6039,6 +6110,7 @@ startBtn.addEventListener('click', startGame);
 function resetProgress() {
   for (const k of ['roomsSolved', 'roomsDiscovered', 'bookSeen']) { try { localStorage.removeItem(k); } catch (e) {} }
   SOLVED = {}; DISC = {}; BOOK_SEEN = {};
+  GUN.has = false; GUN.opened = {}; GUN.rev = 0; GUN.hinted = false; saveGun();
   if (typeof scanSound === 'function') scanSound(false);
   held = null; useBtn = false; useTap = false;
   for (const o of OBJS) {
